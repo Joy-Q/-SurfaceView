@@ -1,0 +1,454 @@
+package com.hehe.noisedetect.view.views;
+
+import android.animation.ValueAnimator;
+import android.content.Context;
+import android.graphics.Canvas;
+import android.graphics.Color;
+import android.graphics.CornerPathEffect;
+import android.graphics.Paint;
+import android.graphics.Path;
+import android.graphics.PixelFormat;
+import android.graphics.PorterDuff;
+import android.graphics.PorterDuffXfermode;
+import android.graphics.Typeface;
+import android.util.AttributeSet;
+import android.view.SurfaceHolder;
+import android.view.SurfaceView;
+import android.view.animation.LinearInterpolator;
+
+import com.mobvoi.android.common.utils.ApplicationUtils;
+import com.mobvoi.android.common.utils.LogUtil;
+import com.mobvoi.ticwear.noisedetect.R;
+
+import static com.mobvoi.ticwear.noisedetect.model.Constants.DEFAULT_NOISE_VALUE;
+
+public class RoundTriangleSurfaceView extends SurfaceView implements SurfaceHolder.Callback, Runnable {
+
+    private SurfaceHolder mHolder;
+    /**
+     * 与SurfaceHolder绑定的Canvas
+     */
+    private Canvas mCanvas;
+    /**
+     * 用于绘制的线程
+     */
+    private Thread mDrawThread;
+    /**
+     * 线程的控制开关
+     */
+    private boolean mIsRunning = true;
+
+    private static final String TAG = "RoundTriangle";
+
+    private int mNowNoiseValue;
+    private int mOldNoiseValue;
+    private int mNewNoiseValue;
+    private String mNoiseString = DEFAULT_NOISE_VALUE;
+    //绘制打底图案
+    Paint mBottomPaint;
+    Paint mBottomRectanglePaint;
+    //绘制覆盖的图案
+    Paint mPaintOverride;
+    //绘制文本案
+    Paint mTextPaint;
+    //绘制打底图案的path
+    Path mBottomPath;
+    //绘制覆盖图案的path
+    Path mOverridePath;
+
+    //最初的设计是在400*400的表盘上
+    private static final float BASE_RADIUS = 200;
+    private static final float BASE_WIDTH = 400;
+    private static final float BASE_HEIGHT = 400;
+    private static final float SCALE = 1.75f;
+    private float mInnerPointRadius;
+    private float mOuterPointRadius;
+    private float mPointRadius;
+    private int mX0 = 0;
+    private int mY0 = 0;
+    float radius = 6.0f;
+    private int mIndex;
+    private float mX2;
+    private float mY2;
+    private float mX3;
+    private float mY3;
+    private float mX4;
+    private float mY4;
+    private float mX5;
+    private float mY5;
+    private int mTriangleSize = 0;
+    private int mPointSize = 0;
+    private float mX1;
+    private float mY1;
+    private CornerPathEffect mCorEffect = new CornerPathEffect(radius);
+
+    private String mStrong;
+    private String mStronger;
+    private String mNormal;
+    private int mRealWidth;
+    private int mRealHeight;
+    private boolean mInChinese;
+    private int initCount;
+    private int mAnimatedValue;
+    private Paint mClearCanvasPaint;
+
+    public RoundTriangleSurfaceView(Context context) {
+        this(context, null);
+    }
+
+    public RoundTriangleSurfaceView(Context context, AttributeSet attrs) {
+        this(context, attrs, 0);
+    }
+
+    public RoundTriangleSurfaceView(Context context, AttributeSet attrs, int defStyleAttr) {
+        super(context, attrs, defStyleAttr);
+        mStrong = ApplicationUtils.getApplication().getString(R.string.strong);
+        mStronger = ApplicationUtils.getApplication().getString(R.string.relative_strong);
+        mNormal = ApplicationUtils.getApplication().getString(R.string.normal);
+        init();
+    }
+
+    private void init() {
+        mHolder = getHolder();
+        mHolder.addCallback(this);
+        // setZOrderOnTop(true);// 设置画布 背景透明
+        // mHolder.setFormat(PixelFormat.TRANSLUCENT);
+        this.setKeepScreenOn(true);
+        mClearCanvasPaint = new Paint();
+        mBottomPaint = new Paint();
+        mBottomPaint.setAntiAlias(true);
+        mBottomPaint.setColor(0x40FFFFFF);
+        mBottomPaint.setStrokeWidth(3);
+        mBottomRectanglePaint = new Paint();
+        mBottomRectanglePaint.setAntiAlias(true);
+        mBottomRectanglePaint.setColor(0xffFFFFFF);
+        mBottomRectanglePaint.setStrokeWidth(3);
+        mPaintOverride = new Paint();
+        mPaintOverride.setAntiAlias(true);
+        mBottomPath = new Path();
+        mOverridePath = new Path();
+        mTextPaint = new Paint();
+        mInChinese = getResources().getConfiguration().locale.getCountry().equals("CN") ||
+                getResources().getConfiguration().locale.getCountry().equals("TW");
+    }
+
+    @Override
+    protected void onSizeChanged(int w, int h, int oldw, int oldh) {
+        super.onSizeChanged(w, h, oldw, oldh);
+        mRealWidth = w;
+        mRealHeight = h;
+        int mRealRadius = mRealWidth / 2;
+        mInnerPointRadius = 165 / BASE_RADIUS * mRealRadius;
+        mOuterPointRadius = 192 / BASE_RADIUS * mRealRadius;
+        mPointRadius = 175 / BASE_RADIUS * mRealRadius;
+        LogUtil.d(TAG, "mInnerPointRadius:" + mInnerPointRadius + "  mOuterPointRadius:" + mOuterPointRadius + "  mPointRadius:" + mPointRadius);
+    }
+
+    @Override
+    public void surfaceCreated(SurfaceHolder holder) {
+        //surfaceview默认是在视图的最底层，调到最上层，同时，设置为透明
+        setZOrderOnTop(true);
+        getHolder().setFormat(PixelFormat.TRANSPARENT);
+        // 开启线程
+        mIsRunning = true;
+        mDrawThread = new Thread(this);
+        mDrawThread.start();
+    }
+
+    @Override
+    public void surfaceChanged(SurfaceHolder holder, int format, int width, int height) {
+
+    }
+
+    @Override
+    public void surfaceDestroyed(SurfaceHolder holder) {
+        // 通知关闭线程
+        mIsRunning = false;
+    }
+
+    @Override
+    public void run() {
+        try {
+            while (mIsRunning) {
+                mCanvas = mHolder.lockCanvas();
+                if (mCanvas != null) {
+                    //清屏start https://blog.csdn.net/bangyiqing/article/details/23925903
+                    mClearCanvasPaint.setXfermode(new PorterDuffXfermode(PorterDuff.Mode.CLEAR));
+                    mCanvas.drawPaint(mClearCanvasPaint);
+                    mClearCanvasPaint.setXfermode(new PorterDuffXfermode(PorterDuff.Mode.SRC));
+                    //清屏end
+                    drawTriangle(mCanvas);
+                    mHolder.unlockCanvasAndPost(mCanvas);
+                }
+            }
+        } catch (Exception e) {
+        } finally {
+            if (mCanvas != null)
+                mHolder.unlockCanvasAndPost(mCanvas);
+        }
+    }
+
+
+    private void drawTriangle(Canvas canvas) {
+        //1.先绘制底部的灰色的图案
+        canvas.save();
+        canvas.translate((float) getWidth() / 2, (float) getHeight() / 2);
+        drawBottomRectanglesAndPoints(canvas);
+        canvas.restore();
+        canvas.save();
+        canvas.translate((float) getWidth() / 2, (float) getHeight() / 2);
+        //2.绘制覆蓋的圆角梯形,梯形的颜色，需要根据噪音值的不同，设置不同的画笔颜色
+        drawOverrideRectangle(canvas);
+        //3.再绘制9个小点,点的颜色，需要根据噪音值的不同，设置不同的画笔颜色, 确定覆盖多少个图形
+        drawNinePoints(canvas);
+        canvas.restore();
+        //4.绘制表盘一圈的噪音数值的文字
+        drawNumbers(canvas);
+        //5.绘制噪音值
+        if (mNowNoiseValue != 0) {
+            drawNoiseValue(canvas, getNoiseValue());
+            //6.绘制底部的文字
+            drawTextValue(canvas);
+        }
+    }
+
+    /**
+     * 3.2中
+     * 先找到等腰三角形最里面的点(尖点)，虽然不用，但作為整個計算的基準
+     * int x1 = (float) (mX0 + mInnerPointRadius * Math.cos(Math.toRadians(mIndex * (365.0f / 11) - (365.0f / 11 / 2) - 223)));
+     * int y1 = (float) (mY0 + mInnerPointRadius * Math.sin(Math.toRadians(mIndex * (365.0f / 11) - (365.0f / 11 / 2) - 223)));
+     */
+    private void drawBottomRectanglesAndPoints(Canvas canvas) {
+        initCount++;
+        // 3.1先绘制余下小点,点的颜色，需要根据噪音值的不同，设置不同的画笔颜色
+        for (mIndex = 0; mIndex < 9; mIndex++) {
+            mX1 = (float) (mX0 + mPointRadius * Math.cos(Math.toRadians(mIndex * (365.0f / 11) - 223)));
+            mY1 = (float) (mY0 + mPointRadius * Math.sin(Math.toRadians(mIndex * (365.0f / 11) - 223)));
+            canvas.drawCircle(mX1, mY1, 5, mBottomPaint);
+        }
+        if (initCount > 1) {
+            initCount = 2;
+            mBottomRectanglePaint.setAlpha(5);
+        }
+        // 3.2再绘制余下圆角梯形,梯形的颜色，需要根据噪音值的不同，设置不同的画笔颜色
+        for (mIndex = 0; mIndex < 10; mIndex++) {
+            //分别获得梯形的四个点,先找到梯形下面的兩個點
+            mX2 = (float) (mX0 + mOuterPointRadius * Math.cos(Math.toRadians(mIndex * (365.0f / 11) - (365.0f / 11 / 2) - 226)));
+            mY2 = (float) (mY0 + mOuterPointRadius * Math.sin(Math.toRadians(mIndex * (365.0f / 11) - (365.0f / 11 / 2) - 226)));
+
+            mX3 = (float) (mX0 + mOuterPointRadius * Math.cos(Math.toRadians(mIndex * (365.0f / 11) - (365.0f / 11 / 2) - 220)));
+            mY3 = (float) (mY0 + mOuterPointRadius * Math.sin(Math.toRadians(mIndex * (365.0f / 11) - (365.0f / 11 / 2) - 220)));
+
+            //再找到梯形的上面的兩個點
+            mX4 = (float) (mX0 + mInnerPointRadius * Math.cos(Math.toRadians(mIndex * (365.0f / 11) - (365.0f / 11 / 2) - 221.7)));
+            mY4 = (float) (mY0 + mInnerPointRadius * Math.sin(Math.toRadians(mIndex * (365.0f / 11) - (365.0f / 11 / 2) - 221.7)));
+
+            mX5 = (float) (mX0 + mInnerPointRadius * Math.cos(Math.toRadians(mIndex * (365.0f / 11) - (365.0f / 11 / 2) - 224.3)));
+            mY5 = (float) (mY0 + mInnerPointRadius * Math.sin(Math.toRadians(mIndex * (365.0f / 11) - (365.0f / 11 / 2) - 224.3)));
+            mBottomRectanglePaint.setPathEffect(mCorEffect);
+            mBottomPath.moveTo(mX2, mY2);
+            mBottomPath.lineTo(mX3, mY3);
+            mBottomPath.lineTo(mX4, mY4);
+            mBottomPath.lineTo(mX5, mY5);
+            mBottomPath.lineTo(mX2, mY2);
+            mBottomPath.close();
+            canvas.drawPath(mBottomPath, mBottomRectanglePaint);
+        }
+    }
+
+    private void drawOverrideRectangle(Canvas canvas) {
+        if (mNowNoiseValue >= 80) {
+            mTriangleSize = 6 + (mNowNoiseValue - 80) / 10;
+            mPaintOverride.setColor(Color.RED);
+            //80之前的点都设置为红色，同时需要拿到数值和点之间的关系
+        } else if (mNowNoiseValue >= 60) {
+            mTriangleSize = 4 + (mNowNoiseValue - 60) / 10;
+            mPaintOverride.setColor(Color.YELLOW);
+        } else if (mNowNoiseValue >= 30) {
+            mTriangleSize = 1 + (mNowNoiseValue - 30) / 10;
+            mPaintOverride.setColor(Color.GREEN);
+        } else {
+            mTriangleSize = 0;
+        }
+        mOverridePath.reset();
+
+        for (mIndex = 0; mIndex < mTriangleSize; mIndex++) {
+            //分别获得梯形的四个点,先找到梯形下面的兩個點
+            mX2 = (float) (mX0 + mOuterPointRadius * Math.cos(Math.toRadians(mIndex * (365.0f / 11) - (365.0f / 11 / 2) - 226)));
+            mY2 = (float) (mY0 + mOuterPointRadius * Math.sin(Math.toRadians(mIndex * (365.0f / 11) - (365.0f / 11 / 2) - 226)));
+
+            mX3 = (float) (mX0 + mOuterPointRadius * Math.cos(Math.toRadians(mIndex * (365.0f / 11) - (365.0f / 11 / 2) - 220)));
+            mY3 = (float) (mY0 + mOuterPointRadius * Math.sin(Math.toRadians(mIndex * (365.0f / 11) - (365.0f / 11 / 2) - 220)));
+
+            //再找到梯形的上面的兩個點
+            mX4 = (float) (mX0 + mInnerPointRadius * Math.cos(Math.toRadians(mIndex * (365.0f / 11) - (365.0f / 11 / 2) - 221.7)));
+            mY4 = (float) (mY0 + mInnerPointRadius * Math.sin(Math.toRadians(mIndex * (365.0f / 11) - (365.0f / 11 / 2) - 221.7)));
+            //先找到三角形最里面的点
+            mX5 = (float) (mX0 + mInnerPointRadius * Math.cos(Math.toRadians(mIndex * (365.0f / 11) - (365.0f / 11 / 2) - 224.3)));
+            mY5 = (float) (mY0 + mInnerPointRadius * Math.sin(Math.toRadians(mIndex * (365.0f / 11) - (365.0f / 11 / 2) - 224.3)));
+            mPaintOverride.setPathEffect(mCorEffect);
+            mOverridePath.moveTo(mX2, mY2);
+            mOverridePath.lineTo(mX3, mY3);
+            mOverridePath.lineTo(mX4, mY4);
+            mOverridePath.lineTo(mX5, mY5);
+            mOverridePath.lineTo(mX2, mY2);
+            mOverridePath.close();
+            canvas.drawPath(mOverridePath, mPaintOverride);
+        }
+    }
+
+    private void drawNinePoints(Canvas canvas) {
+        mPaintOverride.setStrokeWidth(3);
+        if (mNowNoiseValue >= 85) {
+            mPointSize = 6 + (mNowNoiseValue - 85) / 10;
+            //80之前的点都设置为红色，同时需要拿到数值和点之间的关系
+        } else if (mNowNoiseValue >= 65) {
+            mPointSize = 4 + (mNowNoiseValue - 65) / 10;
+        } else if (mNowNoiseValue >= 35) {
+            mPointSize = 1 + (mNowNoiseValue - 35) / 10;
+        } else {
+            mPointSize = 0;
+        }
+        for (mIndex = 0; mIndex < mPointSize; mIndex++) {
+            mX1 = (float) (mPointRadius * Math.cos(Math.toRadians(mIndex * (365.0f / 11) - 223)));
+            mY1 = (float) (mPointRadius * Math.sin(Math.toRadians(mIndex * (365.0f / 11) - 223)));
+            canvas.drawCircle(mX1, mY1, 5, mPaintOverride);
+        }
+    }
+
+    private void drawNumbers(Canvas canvas) {
+        //绘制10个噪音值数字
+        mTextPaint.setAntiAlias(true);
+        mTextPaint.setTextSize(20);
+        mTextPaint.setColor(0x40FFFFFF);
+        for (mIndex = 0; mIndex < 10; mIndex++) {
+            String mNoiseListValue = 30 + 10 * mIndex + "";
+            switch (mIndex) {
+                case 0:
+                    canvas.drawText(mNoiseListValue, dpToPx(70 / BASE_WIDTH * mRealWidth), dpToPx(195 / BASE_HEIGHT * mRealHeight), mTextPaint);
+                    break;
+                case 1:
+                    canvas.drawText(mNoiseListValue, dpToPx(35 / BASE_WIDTH * mRealWidth), dpToPx(160 / BASE_HEIGHT * mRealHeight), mTextPaint);
+                    break;
+                case 2:
+                    canvas.drawText(mNoiseListValue, dpToPx(25 / BASE_WIDTH * mRealWidth), dpToPx(107 / BASE_HEIGHT * mRealHeight), mTextPaint);
+                    break;
+                case 3:
+                    canvas.drawText(mNoiseListValue, dpToPx(45 / BASE_WIDTH * mRealWidth), dpToPx(65 / BASE_HEIGHT * mRealHeight), mTextPaint);
+                    break;
+                case 4:
+                    canvas.drawText(mNoiseListValue, dpToPx(82 / BASE_WIDTH * mRealWidth), dpToPx(38 / BASE_HEIGHT * mRealHeight), mTextPaint);
+                    break;
+                case 5:
+                    canvas.drawText(mNoiseListValue, dpToPx(131 / BASE_WIDTH * mRealWidth), dpToPx(38 / BASE_HEIGHT * mRealHeight), mTextPaint);
+                    break;
+                case 6:
+                    canvas.drawText(mNoiseListValue, dpToPx(171 / BASE_WIDTH * mRealWidth), dpToPx(65 / BASE_HEIGHT * mRealHeight), mTextPaint);
+                    break;
+                case 7:
+                    canvas.drawText(mNoiseListValue, dpToPx(185 / BASE_WIDTH * mRealWidth), dpToPx(107 / BASE_HEIGHT * mRealHeight), mTextPaint);
+                    break;
+                case 8:
+                    canvas.drawText(mNoiseListValue, dpToPx(178 / BASE_WIDTH * mRealWidth), dpToPx(160 / BASE_HEIGHT * mRealHeight), mTextPaint);
+                    break;
+                case 9:
+                    canvas.drawText(mNoiseListValue, dpToPx(140 / BASE_WIDTH * mRealWidth), dpToPx(195 / BASE_HEIGHT * mRealHeight), mTextPaint);
+                    break;
+            }
+        }
+    }
+
+    private void drawNoiseValue(Canvas canvas, String noiseValue) {
+        mTextPaint.setTextSize(dpToPx(17 / BASE_WIDTH * mRealWidth));
+        mTextPaint.setColor(0xffFFFFFF);
+        canvas.drawText("dB", dpToPx(150 / BASE_WIDTH * mRealWidth), dpToPx(127 / BASE_HEIGHT * mRealHeight), mTextPaint);
+        mTextPaint.setTextSize(dpToPx(54));
+        mTextPaint.setTypeface(Typeface.DEFAULT_BOLD);
+        if (Integer.parseInt(noiseValue) > 99) {
+            canvas.drawText(noiseValue, dpToPx(60 / BASE_WIDTH * mRealWidth), dpToPx(127 / BASE_HEIGHT * mRealHeight), mTextPaint);
+        } else if (Integer.parseInt(noiseValue) > 10) {
+            canvas.drawText(noiseValue, dpToPx(80 / BASE_WIDTH * mRealWidth), dpToPx(127 / BASE_HEIGHT * mRealHeight), mTextPaint);
+        } else {
+            canvas.drawText(noiseValue, dpToPx(90 / BASE_WIDTH * mRealWidth), dpToPx(127 / BASE_HEIGHT * mRealHeight), mTextPaint);
+        }
+    }
+
+    private void drawTextValue(Canvas canvas) {
+        mTextPaint.setTextSize(dpToPx(19 / BASE_WIDTH * mRealWidth));
+        String mNoiseText;
+        if (mNowNoiseValue > 80) {
+            mTextPaint.setColor(Color.RED);
+            mNoiseText = mStrong;
+            if (mInChinese) {
+                canvas.drawText(mNoiseText, dpToPx(103 / BASE_WIDTH * mRealWidth), dpToPx(157 / BASE_HEIGHT * mRealHeight), mTextPaint);
+            } else {
+                mTextPaint.setTextAlign(Paint.Align.RIGHT);
+                canvas.drawText(mNoiseText, dpToPx(145 / BASE_WIDTH * mRealWidth), dpToPx(155 / BASE_HEIGHT * mRealHeight), mTextPaint);
+                mTextPaint.setTextAlign(Paint.Align.LEFT);
+            }
+        } else if (mNowNoiseValue > 60) {
+            mTextPaint.setColor(Color.YELLOW);
+            mNoiseText = mStronger;
+            if (mInChinese) {
+                canvas.drawText(mNoiseText, dpToPx(95 / BASE_WIDTH * mRealWidth), dpToPx(157 / BASE_HEIGHT * mRealHeight), mTextPaint);
+            } else {
+                mTextPaint.setTextAlign(Paint.Align.RIGHT);
+                canvas.drawText(mNoiseText, dpToPx(145 / BASE_WIDTH * mRealWidth), dpToPx(155 / BASE_HEIGHT * mRealHeight), mTextPaint);
+                mTextPaint.setTextAlign(Paint.Align.LEFT);
+            }
+        } else if (mNowNoiseValue > 30) {
+            mTextPaint.setColor(Color.GREEN);
+            mNoiseText = mNormal;
+            if (mInChinese) {
+                canvas.drawText(mNoiseText, dpToPx(95 / BASE_WIDTH * mRealWidth), dpToPx(157 / BASE_HEIGHT * mRealHeight), mTextPaint);
+            } else {
+                mTextPaint.setTextAlign(Paint.Align.RIGHT);
+                canvas.drawText(mNoiseText, dpToPx(145 / BASE_WIDTH * mRealWidth), dpToPx(155 / BASE_HEIGHT * mRealHeight), mTextPaint);
+                mTextPaint.setTextAlign(Paint.Align.LEFT);
+            }
+        }
+    }
+
+    private ValueAnimator animator;
+
+    ValueAnimator.AnimatorUpdateListener listener = new ValueAnimator.AnimatorUpdateListener() {
+        @Override
+        public void onAnimationUpdate(ValueAnimator animation) {
+            if (mAnimatedValue != (int) animation.getAnimatedValue()) {
+                mAnimatedValue = (int) animation.getAnimatedValue();
+                mNowNoiseValue = mAnimatedValue;
+            }
+        }
+    };
+
+    LinearInterpolator mLinearInterpolator = new LinearInterpolator();
+
+    public void setNoiseValue(int value, String mNoiseStringValue) {
+        mOldNoiseValue = mNewNoiseValue;
+        this.mNewNoiseValue = value;
+        this.mNoiseString = mNoiseStringValue;
+        if (mNewNoiseValue != 0) {
+            if (animator != null && animator.isRunning()) {
+                animator.end();
+            }
+            animator = ValueAnimator.ofInt(mOldNoiseValue, mNewNoiseValue);
+            animator.setRepeatCount(0);
+            animator.setDuration(1000);
+            animator.setInterpolator(mLinearInterpolator);
+            animator.removeAllUpdateListeners();
+            animator.addUpdateListener(listener);
+            animator.start();
+        }
+    }
+
+    private String getNoiseValue() {
+        return mNoiseString;
+    }
+
+    //dp转换为px
+    public int dpToPx(float dpValue) {
+        //获得当前屏幕密度
+        return (int) (dpValue * SCALE + 0.10f);
+    }
+
+}
